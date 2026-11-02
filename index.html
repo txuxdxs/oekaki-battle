@@ -1,0 +1,213 @@
+
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<meta name="theme-color" content="#17152d">
+<title>お絵かきバトル</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#17152d;color:white;font-family:sans-serif;text-align:center}
+h1{color:#ffcf4a;margin:15px}
+button,select,input{padding:11px;margin:4px;border:0;border-radius:9px;font-size:15px}
+button{background:#5143a5;color:white;font-weight:bold}
+canvas{background:white;border:3px solid #ffcf4a;border-radius:12px;touch-action:none;width:94%;max-width:500px}
+.panel{background:#292545;margin:12px;padding:12px;border-radius:14px}
+input[type=color]{width:48px;height:42px;padding:2px}
+#arena{height:280px;background:radial-gradient(#38305d,#080817);position:relative;overflow:hidden;border-radius:14px}
+.fighter{position:absolute;width:85px;height:85px;object-fit:contain;top:90px;transition:left .3s,top .3s;image-rendering:auto}
+#hero{left:12%}
+#enemy{right:12%;transform:scaleX(-1)}
+.damage{position:absolute;color:#ffdf38;font-size:30px;font-weight:bold;animation:pop 1s forwards;pointer-events:none}
+@keyframes pop{0%{opacity:1;transform:translateY(0) scale(1.5)}100%{opacity:0;transform:translateY(-90px) scale(.7)}}
+#log{height:45px;color:#ffda5c}
+.stats{text-align:left;line-height:1.8}
+</style>
+</head>
+<body>
+<h1>⚔️ お絵かきバトル ⚔️</h1>
+<div class="panel">
+<h3>🎨 キャラクターを描こう！</h3>
+<input id="charname" placeholder="キャラクター名" value="マイキャラ">
+<br>
+<canvas id="canvas" width="500" height="350"></canvas>
+<br>
+<input type="color" id="color" value="#ff3030">
+<button onclick="tool='pen'">✏️ ペン</button>
+<button onclick="tool='fill'">🪣 塗りつぶし</button>
+<br>
+太さ <input type="range" id="size" min="2" max="45" value="10">
+<button onclick="undo()">↩️ 戻す</button>
+<button onclick="clearCanvas()">消去</button>
+<button onclick="judge()">能力判定！</button>
+<div class="stats" id="stats">絵を描いて能力判定しよう！</div>
+<button onclick="saveChar()">💾 キャラクター保存</button>
+</div>
+<div class="panel">
+<h3>🏆 保存キャラクター</h3>
+<select id="mychars"></select>
+<button onclick="loadChar()">呼び出す</button>
+<button onclick="deleteChar()">削除</button>
+</div>
+<div class="panel">
+<h3>🔥 オートバトル 🔥</h3>
+<div id="arena">
+<img id="hero" class="fighter">
+<img id="enemy" class="fighter">
+<div id="log">対戦相手を選ぼう！</div>
+</div>
+<select id="opponent"></select>
+<br>
+<button onclick="battle()">⚔️ バトル開始！</button>
+<button onclick="stopBattle()">停止</button>
+<button onclick="music()">🎵 BGM ON/OFF</button>
+<div id="result"></div>
+</div>
+<script>
+const c=document.getElementById('canvas');
+const ctx=c.getContext('2d');
+ctx.fillStyle='white';ctx.fillRect(0,0,500,350);
+let drawing=false,tool='pen',history=[],characters=[];
+let current=null,playing=false,audio=null,osc=[];
+function snapshot(){history.push(c.toDataURL());if(history.length>20)history.shift()}
+function undo(){
+ if(!history.length)return;
+ let img=new Image();img.onload=()=>{ctx.clearRect(0,0,500,350);ctx.drawImage(img,0,0)};img.src=history.pop();
+}
+function pos(e){
+ let r=c.getBoundingClientRect();
+ return {x:(e.clientX-r.left)*500/r.width,y:(e.clientY-r.top)*350/r.height};
+}
+c.addEventListener('pointerdown',e=>{
+ e.preventDefault();snapshot();
+ if(tool==='fill'){fill(pos(e));return}
+ drawing=true;let p=pos(e);ctx.beginPath();ctx.moveTo(p.x,p.y);
+});
+c.addEventListener('pointermove',e=>{
+ if(!drawing)return;
+ let p=pos(e);ctx.strokeStyle=document.getElementById('color').value;
+ ctx.lineWidth=document.getElementById('size').value;
+ ctx.lineCap='round';ctx.lineJoin='round';ctx.lineTo(p.x,p.y);ctx.stroke();
+});
+window.addEventListener('pointerup',()=>drawing=false);
+function clearCanvas(){snapshot();ctx.fillStyle='white';ctx.fillRect(0,0,500,350)}
+function fill(p){
+ let x=Math.floor(p.x),y=Math.floor(p.y);
+ let data=ctx.getImageData(0,0,500,350),d=data.data;
+ let i=(y*500+x)*4,old=[d[i],d[i+1],d[i+2]];
+ let col=document.getElementById('color').value;
+ let rgb=[parseInt(col.slice(1,3),16),parseInt(col.slice(3,5),16),parseInt(col.slice(5,7),16)];
+ if(old.every((v,j)=>Math.abs(v-rgb[j])<5))return;
+ let stack=[[x,y]],seen=new Uint8Array(500*350);
+ while(stack.length){
+ let [a,b]=stack.pop();if(a<0||b<0||a>=500||b>=350)continue;
+ let n=b*500+a;if(seen[n])continue;seen[n]=1;
+ let k=n*4;
+ if(Math.abs(d[k]-old[0])+Math.abs(d[k+1]-old[1])+Math.abs(d[k+2]-old[2])>45)continue;
+ d[k]=rgb[0];d[k+1]=rgb[1];d[k+2]=rgb[2];
+ stack.push([a+1,b],[a-1,b],[a,b+1],[a,b-1]);
+ }
+ ctx.putImageData(data,0,0);
+}
+function judge(){
+ let d=ctx.getImageData(0,0,500,350).data;
+ let count=0,colors=new Set(),xs=500,ys=350,xe=0,ye=0;
+ for(let y=0;y<350;y+=2)for(let x=0;x<500;x+=2){
+ let i=(y*500+x)*4;
+ if(d[i]<245||d[i+1]<245||d[i+2]<245){
+ count++;xs=Math.min(xs,x);ys=Math.min(ys,y);xe=Math.max(xe,x);ye=Math.max(ye,y);
+ colors.add(Math.floor(d[i]/32)+','+Math.floor(d[i+1]/32)+','+Math.floor(d[i+2]/32));
+ }}
+ let area=Math.max(1,(xe-xs)*(ye-ys));
+ let hp=Math.min(100000,Math.round(10000+count*2));
+ let atk=Math.min(100000,Math.round(5000+colors.size*1800+area/15));
+ let def=Math.min(100000,Math.round(5000+count*1.2));
+ let spd=Math.min(100000,Math.round(5000+colors.size*1200+(xe-xs)*8));
+ current={name:document.getElementById('charname').value||'無名',hp,atk,def,spd,img:c.toDataURL()};
+ document.getElementById('stats').innerHTML=
+ '❤️ HP：'+hp+'<br>⚔️ 攻撃力：'+atk+'<br>🛡️ 防御力：'+def+'<br>💨 素早さ：'+spd;
+}
+function saveChar(){
+ if(!current)judge();
+ characters=JSON.parse(localStorage.getItem('oekakiChars')||'[]');
+ let old=characters.findIndex(x=>x.name===current.name);
+ if(old>=0)characters[old]=current;else characters.push(current);
+ localStorage.setItem('oekakiChars',JSON.stringify(characters));
+ refresh();alert('保存したで！');
+}
+function refresh(){
+ characters=JSON.parse(localStorage.getItem('oekakiChars')||'[]');
+ ['mychars','opponent'].forEach(id=>{
+ let s=document.getElementById(id);s.innerHTML='';
+ characters.forEach((ch,i)=>{let o=document.createElement('option');o.value=i;o.textContent=ch.name;s.appendChild(o)});
+ });
+}
+function loadChar(){
+ let ch=characters[+document.getElementById('mychars').value];if(!ch)return;
+ let img=new Image();img.onload=()=>{ctx.clearRect(0,0,500,350);ctx.drawImage(img,0,0,500,350)};
+ img.src=ch.img;current=ch;document.getElementById('charname').value=ch.name;
+ document.getElementById('stats').innerHTML='❤️ HP：'+ch.hp+'<br>⚔️ 攻撃力：'+ch.atk+'<br>🛡️ 防御力：'+ch.def+'<br>💨 素早さ：'+ch.spd;
+}
+function deleteChar(){
+ characters.splice(+document.getElementById('mychars').value,1);
+ localStorage.setItem('oekakiChars',JSON.stringify(characters));refresh();
+}
+let timer=null;
+function damage(x,y,n){
+ let el=document.createElement('div');el.className='damage';el.textContent='-'+n;
+ el.style.left=x+'%';el.style.top=y+'px';document.getElementById('arena').appendChild(el);
+ setTimeout(()=>el.remove(),1000);
+}
+function battle(){
+ if(playing)return;
+ if(!current)judge();
+ characters=JSON.parse(localStorage.getItem('oekakiChars')||'[]');
+ let enemy=characters[+document.getElementById('opponent').value];
+ if(!enemy){alert('先にキャラクターを2体以上保存してな！');return}
+ if(enemy.name===current.name){alert('違うキャラクターを選んでな！');return}
+ playing=true;
+ let a={...current,hpNow:current.hp},b={...enemy,hpNow:enemy.hp};
+ let h=document.getElementById('hero'),v=document.getElementById('enemy');
+ h.src=a.img;v.src=b.img;h.style.left='12%';v.style.left='75%';
+ document.getElementById('result').textContent='';
+ let turn=0;
+ timer=setInterval(()=>{
+ turn++;
+ let first=(a.spd>=b.spd)===(turn%2===1);
+ let attacker=first?a:b,defender=first?b:a;
+ let target=first?v:h,source=first?h:v;
+ let dmg=Math.max(1,Math.round(attacker.atk*(.25+Math.random()*.25)-defender.def*.12));
+ defender.hpNow=Math.max(0,defender.hpNow-dmg);
+ source.style.left=first?'63%':'25%';
+ target.style.left=first?'76%':'5%';
+ damage(first?78:8,65,dmg);
+ document.getElementById('log').textContent=attacker.name+' の攻撃！';
+ setTimeout(()=>{source.style.left=first?'12%':'75%';target.style.left=first?'75%':'12%'},250);
+ if(defender.hpNow===0){
+ clearInterval(timer);playing=false;
+ document.getElementById('log').textContent=attacker.name+' の勝利！！';
+ document.getElementById('result').textContent='🏆 '+attacker.name+' WIN！ ターン '+turn;
+ }
+ },650);
+}
+function stopBattle(){clearInterval(timer);playing=false;document.getElementById('log').textContent='バトル停止';}
+function music(){
+ if(audio){audio.close();audio=null;return}
+ audio=new (window.AudioContext||window.webkitAudioContext)();
+ let melody=[220,277,330,440,330,277,196,247];
+ let i=0;
+ function note(){
+ if(!audio)return;
+ let o=audio.createOscillator(),g=audio.createGain();
+ o.type='square';o.frequency.value=melody[i++%melody.length];
+ g.gain.value=.035;o.connect(g);g.connect(audio.destination);
+ o.start();o.stop(audio.currentTime+.16);
+ setTimeout(note,190);
+ }
+ note();
+}
+refresh();
+</script>
+</body>
+</html>
